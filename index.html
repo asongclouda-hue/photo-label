@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>蝦皮照片加字</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#ee4d2d">
+<link rel="icon" href="icon-192.png">
+<style>
+  body{margin:0;font-family:"Microsoft JhengHei","Noto Sans TC",sans-serif;background:#f4f4f4;color:#222}
+  header{background:#ee4d2d;color:#fff;padding:12px 16px;font-weight:bold;font-size:18px}
+  header small{font-weight:normal;opacity:.85;margin-left:6px}
+  main{padding:16px;max-width:720px;margin:auto}
+  .row{margin-bottom:14px}
+  label{display:block;font-weight:bold;margin-bottom:6px}
+  select,input[type=text],input[type=number],textarea{width:100%;box-sizing:border-box;font-size:18px;padding:8px;border-radius:8px;border:1px solid #bbb;background:#fff}
+  input[type=range]{width:100%}
+  button{font-size:18px;padding:12px 18px;border:0;border-radius:8px;background:#ee4d2d;color:#fff;width:100%}
+  button.sub{background:#fff;color:#ee4d2d;border:1px solid #ee4d2d;font-size:15px;padding:6px 10px;width:auto}
+  canvas{width:100%;height:auto;background:#ddd;touch-action:none;display:block;border-radius:8px}
+  .hint{color:#666;font-size:14px;margin:6px 0 0}
+  .warn{color:#c0392b}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .card{background:#fff;border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid #e3e3e3}
+  details summary{cursor:pointer;color:#555}
+  #thumbs{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+  .thumb{width:76px;text-align:center;font-size:13px}
+  .thumb img{width:76px;height:76px;object-fit:cover;border-radius:6px;display:block}
+  .thumb .ctl{display:flex;justify-content:space-between;margin-top:2px}
+  .thumb .ctl span{cursor:pointer;padding:2px 6px;border-radius:4px;background:#eee;user-select:none}
+  .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header>蝦皮照片加字<small>v0.8</small></header>
+<main>
+  <div class="card">
+    <div class="grid">
+      <div>
+        <label for="store">店名</label>
+        <select id="store"></select>
+      </div>
+      <div>
+        <label for="type">相簿類型</label>
+        <select id="type"></select>
+      </div>
+    </div>
+    <p class="hint">★＝到該店必傳。店名會記住，下次打開不用再選。</p>
+  </div>
+
+  <div class="card">
+    <label for="file">選照片（最多 8 張，可以分次加）</label>
+    <div class="top">
+      <input type="file" id="file" accept="image/*" multiple>
+      <button class="sub" id="clear">全部清除</button>
+    </div>
+    <div id="thumbs"></div>
+    <div id="colsBox" class="row" style="display:none">
+      <label for="cols">組合照：每列幾張</label>
+      <select id="cols">
+        <option value="1">1 張（上下排）</option>
+        <option value="2">2 張</option>
+        <option value="3">3 張</option>
+        <option value="4">4 張</option>
+      </select>
+      <p class="hint">照片完整不裁切。用 ◀ ▶ 調整順序，✕ 移除。</p>
+    </div>
+    <div class="grid" id="fieldsBox">
+      <div>
+        <label for="date">日期（月/日）</label>
+        <input type="text" id="date" inputmode="numeric">
+      </div>
+    </div>
+    <p class="hint" id="dateSrc"></p>
+  </div>
+
+  <div class="row">
+    <label for="text">要加的文字（自動產生，也可以手動修改）</label>
+    <textarea id="text" rows="4"></textarea>
+  </div>
+
+  <details class="row">
+    <summary>調整文字大小／粗細</summary>
+    <label for="size" style="margin-top:8px">文字大小</label>
+    <input type="range" id="size" min="4" max="18" step="0.5" value="10.5">
+    <label for="weight">文字粗細</label>
+    <input type="range" id="weight" min="0" max="8" step="1" value="3">
+  </details>
+
+  <div class="row">
+    <canvas id="cv"></canvas>
+    <p class="hint">用手指或滑鼠拖曳白色文字框，可以移動位置。</p>
+  </div>
+  <div class="row">
+    <button id="save">存成圖片</button>
+  </div>
+</main>
+
+<script>
+// ===== 規則資料（來源：02 要求與偏好／照片類型與加字規則.md）=====
+const STORES = ['天山','一心','文林','正勤','和平','瑞興','崗山中','復興三','民裕','修文'];
+const SHIFT = '一上';
+const MAX_PHOTOS = 8;
+
+// fields：要手動填的欄位；make：組出文字（每個元素一行）；only：只有哪些店有這個相簿
+const TYPES = [
+  { id:'open',   name:'開班照', must:true,
+    fields:[{k:'time', label:'時間（對照 TO 單）', ph:'08:00', type:'text'}],
+    make:v=>[`${v.d} ${v.time}`] },
+  { id:'paper',  name:'紙捲／繳費機測試', must:true, make:v=>[`${v.d} ${SHIFT}`] },
+  { id:'shd1',   name:'SHD 打包完成（第一張）', must:true, only:['天山','文林'],
+    fields:[{k:'n', label:'SHD 數量'}],
+    make:v=>[`${v.d} SHD ${v.n}`, '打包完成'] },
+  { id:'shd2',   name:'SHD 上架完成（第二張）', must:true, only:['天山','文林'],
+    fields:[{k:'total', label:'今日 SHD 上架總數'},{k:'tmr', label:'明日再上架數'},{k:'ret', label:'退貨數'}],
+    make:v=>{
+      const extra = [];
+      if (v.tmr !== '__' && v.tmr !== '0') extra.push(`${v.tmr}明日再上`);
+      if (v.ret !== '__' && v.ret !== '0') extra.push(`退貨${v.ret}`);
+      return [`${v.d} SHD${v.total}`, ...(extra.length ? [extra.join(' ')] : []), '上架完成'];
+    } },
+  { id:'over1',  name:'逾期包裹－前後（第一張）', must:true, make:v=>[`${v.d} 逾期包裹前後`] },
+  { id:'over2',  name:'逾期包裹－全部（第二張）', must:true,
+    fields:[{k:'n', label:'逾期件數'}],
+    make:v=>[`${v.d} 逾期共${v.n}件`] },
+  { id:'win',    name:'每週三 WIN 更新', make:v=>[v.d] },
+  { id:'supply', name:'耗材入庫驗收', make:v=>[v.d] },
+  { id:'money',  name:'滯留金停用櫃位', make:v=>[v.d] },
+  { id:'band',   name:'03 管制束帶回報', must:true,
+    fields:[{k:'scs', label:'SCS 數量'},{k:'ctrl', label:'管制品數量'}],
+    make:v=>[`${v.d} ${v.s}${SHIFT}`, `SCS ${v.scs}`, `管制品 ${v.ctrl}`] },
+  { id:'redist', name:'包裹重新分配-早', must:true, only:['崗山中','正勤','一心','民裕'],
+    make:v=>[v.d, v.s] },
+  { id:'nosmart',name:'無法智能上架', make:v=>[`${v.d} ${v.s}`] },
+  { id:'zero',   name:'每日後場 0 滯留', must:true, make:v=>[v.d, `${v.s}${SHIFT}`, '無滯留'] },
+  { id:'clean',  name:'該店打掃回報', must:true, make:v=>[v.d] },
+  { id:'err',    name:'一般包裹異常', fields:[{k:'why', label:'異常原因', type:'text', ph:'顯示錯店'}],
+    make:v=>[`${v.d} ${v.s}${SHIFT}`, v.why] },
+  { id:'scserr', name:'SCS 商品異常', fields:[{k:'why', label:'異常原因', type:'text', ph:'商品破損'}],
+    make:v=>[`${v.d} ${v.s}${SHIFT}`, v.why] },
+  { id:'lost',   name:'該月份遺落包裹', make:v=>[`${v.d} ${v.s}`] },
+  { id:'heavy',  name:'夭壽重黑箱', make:v=>[`${v.d} ${v.s}`] },
+  { id:'left',   name:'每日剩餘箱數', must:true,
+    fields:[{k:'smart', label:'智能幾箱'},{k:'manual', label:'手動幾箱'}],
+    make:v=>[`${v.d} ${v.s}${SHIFT}`, `智能${v.smart}`, `手動${v.manual}`] },
+  { id:'send',   name:'每日寄件', make:v=>[v.d, `${v.s}${SHIFT}`] },
+];
+
+// 日期格式：月/日，都補零（例：08/17）
+const md = (m, d) => `${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`;
+
+// ===== 畫面元件 =====
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+const storeEl = $('store'), typeEl = $('type'), dateEl = $('date'), textEl = $('text');
+const sizeEl = $('size'), weightEl = $('weight'), fieldsBox = $('fieldsBox'), colsEl = $('cols');
+
+let photos = [];          // 已選的照片：{ img, url, meta }
+let base = null;          // 拼好的照片（不含文字），拖曳時不用重拼
+let pos = { x:0.5, y:0.5 }, box = null, drag = null, lastPhoto = null;
+
+// 記住上次選的店（只存在這台手機／電腦的瀏覽器裡，不會上傳）
+function load(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function save(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
+
+STORES.forEach(s => storeEl.add(new Option(s, s)));
+storeEl.value = STORES.includes(load('store')) ? load('store') : STORES[0];
+
+function fillTypes() {
+  const keep = typeEl.value;
+  typeEl.innerHTML = '';
+  TYPES.filter(t => !t.only || t.only.includes(storeEl.value))
+       .forEach(t => typeEl.add(new Option((t.must ? '★ ' : '') + t.name, t.id)));
+  if ([...typeEl.options].some(o => o.value === keep)) typeEl.value = keep;
+}
+
+function fillFields() {
+  const t = TYPES.find(t => t.id === typeEl.value);
+  fieldsBox.querySelectorAll('.field').forEach(n => n.remove());
+  (t.fields || []).forEach(f => {
+    const d = document.createElement('div');
+    d.className = 'field';
+    const lb = document.createElement('label');
+    lb.textContent = f.label;
+    const inp = document.createElement('input');
+    inp.type = f.type || 'number';
+    if (inp.type === 'number') { inp.inputMode = 'numeric'; inp.min = 0; }
+    inp.placeholder = f.ph || '';
+    inp.dataset.k = f.k;
+    inp.addEventListener('input', buildText);
+    d.append(lb, inp);
+    fieldsBox.appendChild(d);
+  });
+  applyTime();
+}
+
+// 開班照：先帶入拍照時間，請對照 TO 單修改
+function applyTime() {
+  const t = fieldsBox.querySelector('input[data-k="time"]');
+  if (t && lastPhoto) t.value = lastPhoto.hh ? `${lastPhoto.hh}:${lastPhoto.mm}` : '';
+}
+
+// 依規則組出文字（沒填的欄位顯示 __）
+function buildText() {
+  const t = TYPES.find(t => t.id === typeEl.value);
+  const v = { d: dateEl.value.trim(), s: storeEl.value };
+  fieldsBox.querySelectorAll('.field input').forEach(i => v[i.dataset.k] = i.value.trim() || '__');
+  textEl.value = t.make(v).join('\n');
+  draw();
+}
+
+// ===== 讀取拍照日期：先讀照片資訊（EXIF），再讀檔名，最後用今天 =====
+function readExifDate(buf) {
+  const dv = new DataView(buf);
+  if (dv.byteLength < 4 || dv.getUint16(0) !== 0xFFD8) return null;   // 不是 JPG
+  let off = 2;
+  while (off + 10 < dv.byteLength) {
+    const marker = dv.getUint16(off), len = dv.getUint16(off + 2);
+    if (marker === 0xFFE1 && dv.getUint32(off + 4) === 0x45786966) {   // "Exif"
+      const tiff = off + 10, le = dv.getUint16(tiff) === 0x4949;
+      const u16 = p => dv.getUint16(p, le), u32 = p => dv.getUint32(p, le);
+      const findTag = (ifd, tag) => {
+        const n = u16(ifd);
+        for (let i = 0; i < n; i++) { const e = ifd + 2 + i * 12; if (u16(e) === tag) return e; }
+        return null;
+      };
+      const str = e => { let s = ''; const p = tiff + u32(e + 8); for (let i = 0; i < 19; i++) s += String.fromCharCode(dv.getUint8(p + i)); return s; };
+      const ifd0 = tiff + u32(tiff + 4);
+      const exifPtr = findTag(ifd0, 0x8769);
+      if (exifPtr) { const e = findTag(tiff + u32(exifPtr + 8), 0x9003); if (e) return str(e); }  // 拍攝時間
+      const e0 = findTag(ifd0, 0x0132); if (e0) return str(e0);                                 // 檔案時間
+      return null;
+    }
+    if ((marker & 0xFF00) !== 0xFF00) break;
+    off += 2 + len;
+  }
+  return null;
+}
+
+async function getPhotoDate(file) {
+  try {
+    const s = readExifDate(await file.slice(0, 256 * 1024).arrayBuffer());
+    const m = s && s.match(/(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2})/);
+    if (m) return { mo:+m[2], d:+m[3], hh:m[4], mm:m[5], src:'照片資訊' };
+  } catch (e) {}
+  const f = file.name.match(/(20\d{2})(\d{2})(\d{2})[_-]?(\d{2})(\d{2})/);
+  if (f) return { mo:+f[2], d:+f[3], hh:f[4], mm:f[5], src:'檔名' };
+  const n = new Date();
+  return { mo:n.getMonth() + 1, d:n.getDate(), hh:null, mm:null, src:'今天（照片裡讀不到日期，請確認）' };
+}
+
+function loadImage(url) {
+  return new Promise((ok, bad) => { const im = new Image(); im.onload = () => ok(im); im.onerror = bad; im.src = url; });
+}
+
+// ===== 照片清單 =====
+function defaultCols(n) { return n <= 1 ? 1 : n === 2 ? 2 : n === 3 ? 3 : n === 4 ? 2 : n <= 6 ? 3 : 4; }
+
+function onPhotosChanged(firstChanged) {
+  // 日期以第一張照片為準
+  if (firstChanged) {
+    lastPhoto = photos[0] ? photos[0].meta : null;
+    if (lastPhoto) {
+      dateEl.value = md(lastPhoto.mo, lastPhoto.d);
+      const src = $('dateSrc');
+      src.textContent = `日期來源：第 1 張照片的${lastPhoto.src}`;
+      src.className = 'hint' + (lastPhoto.src.startsWith('今天') ? ' warn' : '');
+    } else {
+      $('dateSrc').textContent = '';
+    }
+    applyTime();
+  }
+  $('colsBox').style.display = photos.length > 1 ? '' : 'none';
+  renderThumbs();
+  buildBase();
+  buildText();
+}
+
+function renderThumbs() {
+  const box = $('thumbs');
+  box.innerHTML = '';
+  photos.forEach((p, i) => {
+    const d = document.createElement('div');
+    d.className = 'thumb';
+    d.innerHTML = `<img alt=""><div>第 ${i + 1} 張</div><div class="ctl"><span data-a="L">◀</span><span data-a="X">✕</span><span data-a="R">▶</span></div>`;
+    d.querySelector('img').src = p.url;
+    d.querySelectorAll('span').forEach(s => s.addEventListener('click', () => {
+      const a = s.dataset.a, oldFirst = photos[0];
+      if (a === 'L' && i > 0) [photos[i - 1], photos[i]] = [photos[i], photos[i - 1]];
+      if (a === 'R' && i < photos.length - 1) [photos[i + 1], photos[i]] = [photos[i], photos[i + 1]];
+      if (a === 'X') { URL.revokeObjectURL(p.url); photos.splice(i, 1); colsEl.value = defaultCols(photos.length); }
+      onPhotosChanged(photos[0] !== oldFirst);
+    }));
+    box.appendChild(d);
+  });
+}
+
+$('file').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  e.target.value = '';                      // 讓同一張照片可以再選一次
+  if (!files.length) return;
+  const room = MAX_PHOTOS - photos.length;
+  if (files.length > room) alert(`最多 ${MAX_PHOTOS} 張，這次只加入前 ${Math.max(room, 0)} 張。`);
+  const wasEmpty = photos.length === 0;
+  for (const f of files.slice(0, Math.max(room, 0))) {
+    const url = URL.createObjectURL(f);
+    try {
+      const [img, meta] = await Promise.all([loadImage(url), getPhotoDate(f)]);
+      photos.push({ img, url, meta });
+    } catch (err) { URL.revokeObjectURL(url); alert(`有一張照片讀不到：${f.name}`); }
+  }
+  if (wasEmpty) pos = { x:0.5, y:0.5 };
+  colsEl.value = defaultCols(photos.length);
+  onPhotosChanged(wasEmpty);
+});
+
+$('clear').addEventListener('click', () => {
+  photos.forEach(p => URL.revokeObjectURL(p.url));
+  photos = [];
+  onPhotosChanged(true);
+});
+
+colsEl.addEventListener('change', () => { buildBase(); draw(); });
+
+// ===== 拼組合照：每一列的照片等高、照片完整不裁切，列與列之間留白線 =====
+function buildBase() {
+  if (!photos.length) { base = null; return; }
+  if (photos.length === 1) {
+    const im = photos[0].img;
+    base = document.createElement('canvas');
+    base.width = im.naturalWidth; base.height = im.naturalHeight;
+    base.getContext('2d').drawImage(im, 0, 0);
+    return;
+  }
+  const W = 2000, gap = Math.round(W * 0.008);
+  const cols = +colsEl.value;
+  const rows = [];
+  for (let i = 0; i < photos.length; i += cols) rows.push(photos.slice(i, i + cols));
+
+  // 先算每一列的高度
+  let lastFullH = null;
+  const plan = rows.map((r, ri) => {
+    const ratios = r.map(p => p.img.naturalWidth / p.img.naturalHeight);
+    const sum = ratios.reduce((a, b) => a + b, 0);
+    let h = (W - gap * (r.length - 1)) / sum;
+    // 最後一列張數不足時，跟上一列一樣高、置中，避免照片被放得特別大
+    if (ri === rows.length - 1 && r.length < cols && lastFullH) h = Math.min(h, lastFullH);
+    lastFullH = h;
+    return { r, ratios, h };
+  });
+  const H = Math.round(plan.reduce((a, p) => a + p.h, 0) + gap * (rows.length - 1));
+
+  base = document.createElement('canvas');
+  base.width = W; base.height = H;
+  const b = base.getContext('2d');
+  b.fillStyle = '#fff'; b.fillRect(0, 0, W, H);
+  let y = 0;
+  plan.forEach(({ r, ratios, h }) => {
+    const rowW = ratios.reduce((a, q) => a + q * h, 0) + gap * (r.length - 1);
+    let x = (W - rowW) / 2;
+    r.forEach((p, i) => {
+      const w = ratios[i] * h;
+      b.drawImage(p.img, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+      x += w + gap;
+    });
+    y += h + gap;
+  });
+}
+
+// ===== 畫圖（拼好的照片＋文字框）=====
+function draw() {
+  if (!base) {
+    cv.width = 800; cv.height = 600;
+    ctx.fillStyle = '#ddd'; ctx.fillRect(0, 0, 800, 600);
+    ctx.fillStyle = '#888'; ctx.font = '36px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('請先選照片', 400, 300);
+    box = null; return;
+  }
+  cv.width = base.width; cv.height = base.height;
+  ctx.drawImage(base, 0, 0);
+
+  const lines = textEl.value.split('\n').filter(s => s.trim() !== '');
+  if (!lines.length) { box = null; return; }
+
+  // 字的大小：以短邊為準；組合照很扁時，改用長邊的 6 成，避免字變太小
+  const ref = Math.max(Math.min(cv.width, cv.height), Math.max(cv.width, cv.height) * 0.6);
+  const fs = Math.round(ref * sizeEl.value / 100);
+  ctx.font = `bold ${fs}px "Microsoft JhengHei","Noto Sans TC",sans-serif`;
+  const pad = fs * 0.35, lh = fs * 1.25;
+  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + pad * 2;
+  const h = lh * (lines.length - 1) + fs + pad * 2;
+
+  let x = pos.x * cv.width - w / 2, y = pos.y * cv.height - h / 2;
+  x = Math.max(0, Math.min(cv.width - w, x));
+  y = Math.max(0, Math.min(cv.height - h, y));
+  box = { x, y, w, h };
+
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, fs * 0.25); ctx.fill();
+
+  ctx.fillStyle = '#000'; ctx.strokeStyle = '#000';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.lineJoin = 'round';
+  ctx.lineWidth = fs * weightEl.value / 100;
+  lines.forEach((l, i) => {
+    if (ctx.lineWidth > 0) ctx.strokeText(l, x + w / 2, y + pad + i * lh);
+    ctx.fillText(l, x + w / 2, y + pad + i * lh);
+  });
+}
+
+// ===== 事件 =====
+storeEl.addEventListener('change', () => { save('store', storeEl.value); fillTypes(); fillFields(); buildText(); });
+typeEl.addEventListener('change', () => { fillFields(); buildText(); });
+dateEl.addEventListener('input', buildText);
+textEl.addEventListener('input', draw);
+sizeEl.addEventListener('input', draw);
+weightEl.addEventListener('input', draw);
+
+function toCanvas(e) {
+  const r = cv.getBoundingClientRect();
+  return { x:(e.clientX - r.left) * cv.width / r.width, y:(e.clientY - r.top) * cv.height / r.height };
+}
+cv.addEventListener('pointerdown', e => {
+  if (!box) return;
+  const p = toCanvas(e);
+  if (p.x >= box.x && p.x <= box.x + box.w && p.y >= box.y && p.y <= box.y + box.h) {
+    drag = { dx:p.x - (box.x + box.w / 2), dy:p.y - (box.y + box.h / 2) };
+    cv.setPointerCapture(e.pointerId);
+  }
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const p = toCanvas(e);
+  pos = { x:(p.x - drag.dx) / cv.width, y:(p.y - drag.dy) / cv.height };
+  draw();
+});
+cv.addEventListener('pointerup', () => { drag = null; });
+cv.addEventListener('pointercancel', () => { drag = null; });
+
+$('save').addEventListener('click', () => {
+  if (!base) { alert('請先選照片'); return; }
+  if (textEl.value.includes('__') && !confirm('還有欄位沒填（顯示 __），確定要存嗎？')) return;
+  cv.toBlob(b => {
+    const a = document.createElement('a');
+    const t = new Date();
+    const stamp = `${t.getMonth() + 1}-${t.getDate()}_${t.getHours()}${String(t.getMinutes()).padStart(2,'0')}${String(t.getSeconds()).padStart(2,'0')}`;
+    a.href = URL.createObjectURL(b);
+    a.download = `shopee_${stamp}.jpg`;   // 用英文檔名，避免部分瀏覽器把中文檔名變成 download
+    document.body.appendChild(a); a.click(); a.remove();
+  }, 'image/jpeg', 0.92);
+});
+
+// 初始化
+const today = new Date();
+dateEl.value = md(today.getMonth() + 1, today.getDate());
+fillTypes(); fillFields(); buildText();
+
+// 離線功能：只有從網址（https）開啟時才會啟用，直接點開檔案時不會
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
