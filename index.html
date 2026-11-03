@@ -33,10 +33,11 @@
   .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
   .textBox{margin-bottom:8px}
+  .warnBox{background:#fff3cd;border:3px solid #e0a800;color:#8a1c00;border-radius:10px;padding:14px;margin-bottom:14px;font-size:24px;font-weight:bold;text-align:center;line-height:1.4}
 </style>
 </head>
 <body>
-<header>蝦拼<small>v0.11</small></header>
+<header>蝦拼<small>v0.12</small></header>
 <main>
   <div class="card">
     <div class="grid">
@@ -51,6 +52,9 @@
     </div>
     <p class="hint">★＝到該店必傳。店名會記住，下次打開不用再選。</p>
   </div>
+
+  <!-- 提醒（只在特定相簿顯示，不會出現在存下來的圖片上） -->
+  <div id="warn" class="warnBox" style="display:none"></div>
 
   <div class="card">
     <label for="file">選照片（最多 8 張，可以分次加）</label>
@@ -136,7 +140,7 @@ const MAX_SIDE = 2400;     // 照片先縮到最長邊 2400 像素，手機處�
 // make：組出文字，回傳「文字框陣列」，每個文字框是「每行文字陣列」
 // only：只有哪些店有這個相簿；size／weight：這個相簿預設的文字大小／粗細
 const TYPES = [
-  { id:'open',   name:'開班照', must:true,
+  { id:'open',   name:'開班照', must:true, warn:'⚠ 先打上班卡<br>再印 TO 單！',
     fields:[{k:'time', label:'時間（對照 TO 單）', ph:'08:00', type:'text'}],
     make:v=>[[`${v.d} ${v.time}`]] },
   { id:'paper',  name:'紙捲／繳費機測試', must:true, make:v=>[[v.d, SHIFT]] },
@@ -665,6 +669,9 @@ function cropMove(p) {
 // ===== 事件 =====
 function onTypeChanged() {
   boxPos = [];
+  const w = curType().warn;
+  $('warn').innerHTML = w || '';
+  $('warn').style.display = w ? '' : 'none';
   sizeEl.value = curType().size || 10.5;
   weightEl.value = curType().weight ?? 3;
   fillFields(); buildText();
