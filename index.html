@@ -37,7 +37,7 @@
 </style>
 </head>
 <body>
-<header>蝦拼<small>v0.12</small></header>
+<header>蝦拼<small>v0.13</small></header>
 <main>
   <div class="card">
     <div class="grid">
@@ -759,7 +759,14 @@ fillTypes(); onTypeChanged();
 
 // 離線功能：只有從網址（https）開啟時才會啟用，直接點開檔案時不會
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+    .then(r => r.update())          // 每次打開都檢查有沒有新版
+    .catch(() => {});
+  // 新版接手後自動重新整理一次，畫面就會是最新的
+  // （第一次安裝時不用重新整理，只有「舊版換新版」才需要）
+  const hadOld = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadOld && !reloaded) { reloaded = true; location.reload(); } });
 }
 </script>
 </body>
