@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>蝦皮照片加字</title>
+<title>蝦拼</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#ee4d2d">
 <link rel="icon" href="icon-192.png">
@@ -25,15 +25,18 @@
   .card{background:#fff;border-radius:10px;padding:12px;margin-bottom:14px;border:1px solid #e3e3e3}
   details summary{cursor:pointer;color:#555}
   #thumbs{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-  .thumb{width:76px;text-align:center;font-size:13px}
-  .thumb img{width:76px;height:76px;object-fit:cover;border-radius:6px;display:block}
+  .thumb{width:76px;text-align:center;font-size:13px;border:2px solid transparent;border-radius:8px;padding:2px}
+  .thumb.sel{border-color:#ee4d2d}
+  .thumb img{width:76px;height:76px;object-fit:cover;border-radius:6px;display:block;cursor:pointer}
   .thumb .ctl{display:flex;justify-content:space-between;margin-top:2px}
   .thumb .ctl span{cursor:pointer;padding:2px 6px;border-radius:4px;background:#eee;user-select:none}
   .top{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+  .textBox{margin-bottom:8px}
 </style>
 </head>
 <body>
-<header>蝦皮照片加字<small>v0.8</small></header>
+<header>蝦拼<small>v0.11</small></header>
 <main>
   <div class="card">
     <div class="grid">
@@ -56,6 +59,30 @@
       <button class="sub" id="clear">全部清除</button>
     </div>
     <div id="thumbs"></div>
+
+    <div id="editBox" class="row" style="display:none">
+      <label id="editTitle">調整照片</label>
+      <div class="btns">
+        <button class="sub" id="rotL">↺ 左轉</button>
+        <button class="sub" id="rotR">↻ 右轉</button>
+        <button class="sub" id="cropBtn">✂ 裁切</button>
+        <button class="sub" id="resetPhoto">還原這張</button>
+      </div>
+      <label for="zoom">放大</label>
+      <input type="range" id="zoom" min="1" max="3" step="0.05" value="1">
+      <p class="hint">點縮圖或點畫面上的照片，選擇要調整哪一張。放大後，在畫面上拖曳照片可以移動位置。</p>
+    </div>
+
+    <div id="cropBar" class="row" style="display:none">
+      <label id="cropTitle">裁切照片</label>
+      <div class="btns">
+        <button class="sub" id="cropOk">✔ 完成裁切</button>
+        <button class="sub" id="cropCancel">取消</button>
+        <button class="sub" id="cropNone">不裁切</button>
+      </div>
+      <p class="hint">在下方照片上拖曳四個角的橘色方塊調整範圍，拖曳框框中間可以移動，在框外拖曳可以重新框選。</p>
+    </div>
+
     <div id="colsBox" class="row" style="display:none">
       <label for="cols">組合照：每列幾張</label>
       <select id="cols">
@@ -64,8 +91,9 @@
         <option value="3">3 張</option>
         <option value="4">4 張</option>
       </select>
-      <p class="hint">照片完整不裁切。用 ◀ ▶ 調整順序，✕ 移除。</p>
+      <p class="hint">用縮圖下方的 ◀ ▶ 調整順序，✕ 移除。</p>
     </div>
+
     <div class="grid" id="fieldsBox">
       <div>
         <label for="date">日期（月/日）</label>
@@ -76,8 +104,8 @@
   </div>
 
   <div class="row">
-    <label for="text">要加的文字（自動產生，也可以手動修改）</label>
-    <textarea id="text" rows="4"></textarea>
+    <label>要加的文字（自動產生，也可以手動修改）</label>
+    <div id="texts"></div>
   </div>
 
   <details class="row">
@@ -90,7 +118,7 @@
 
   <div class="row">
     <canvas id="cv"></canvas>
-    <p class="hint">用手指或滑鼠拖曳白色文字框，可以移動位置。</p>
+    <p class="hint">拖曳白色文字框可以移動文字；拖曳放大過的照片可以移動照片。</p>
   </div>
   <div class="row">
     <button id="save">存成圖片</button>
@@ -102,49 +130,54 @@
 const STORES = ['天山','一心','文林','正勤','和平','瑞興','崗山中','復興三','民裕','修文'];
 const SHIFT = '一上';
 const MAX_PHOTOS = 8;
+const MAX_SIDE = 2400;     // 照片先縮到最長邊 2400 像素，手機處理比較快
 
-// fields：要手動填的欄位；make：組出文字（每個元素一行）；only：只有哪些店有這個相簿
+// fields：要手動填的欄位
+// make：組出文字，回傳「文字框陣列」，每個文字框是「每行文字陣列」
+// only：只有哪些店有這個相簿；size／weight：這個相簿預設的文字大小／粗細
 const TYPES = [
   { id:'open',   name:'開班照', must:true,
     fields:[{k:'time', label:'時間（對照 TO 單）', ph:'08:00', type:'text'}],
-    make:v=>[`${v.d} ${v.time}`] },
-  { id:'paper',  name:'紙捲／繳費機測試', must:true, make:v=>[`${v.d} ${SHIFT}`] },
+    make:v=>[[`${v.d} ${v.time}`]] },
+  { id:'paper',  name:'紙捲／繳費機測試', must:true, make:v=>[[v.d, SHIFT]] },
   { id:'shd1',   name:'SHD 打包完成（第一張）', must:true, only:['天山','文林'],
     fields:[{k:'n', label:'SHD 數量'}],
-    make:v=>[`${v.d} SHD ${v.n}`, '打包完成'] },
+    make:v=>[[`${v.d} SHD ${v.n}`, '打包完成']] },
   { id:'shd2',   name:'SHD 上架完成（第二張）', must:true, only:['天山','文林'],
     fields:[{k:'total', label:'今日 SHD 上架總數'},{k:'tmr', label:'明日再上架數'},{k:'ret', label:'退貨數'}],
     make:v=>{
       const extra = [];
-      if (v.tmr !== '__' && v.tmr !== '0') extra.push(`${v.tmr}明日再上`);
-      if (v.ret !== '__' && v.ret !== '0') extra.push(`退貨${v.ret}`);
-      return [`${v.d} SHD${v.total}`, ...(extra.length ? [extra.join(' ')] : []), '上架完成'];
+      if (v.tmr && v.tmr !== '0') extra.push(`${v.tmr}明日再上`);
+      if (v.ret && v.ret !== '0') extra.push(`退貨${v.ret}`);
+      return [[`${v.d} SHD${v.total}`, ...(extra.length ? [extra.join(' ')] : []), '上架完成']];
     } },
-  { id:'over1',  name:'逾期包裹－前後（第一張）', must:true, make:v=>[`${v.d} 逾期包裹前後`] },
-  { id:'over2',  name:'逾期包裹－全部（第二張）', must:true,
+  { id:'over1',  name:'逾期包裹－前後（第一張）', must:true, size:9, make:v=>[[`${v.d} 逾期包裹前後`]] },
+  { id:'over2',  name:'逾期包裹－全部（第二張）', must:true, size:8,
     fields:[{k:'n', label:'逾期件數'}],
-    make:v=>[`${v.d} 逾期共${v.n}件`] },
-  { id:'win',    name:'每週三 WIN 更新', make:v=>[v.d] },
-  { id:'supply', name:'耗材入庫驗收', make:v=>[v.d] },
-  { id:'money',  name:'滯留金停用櫃位', make:v=>[v.d] },
-  { id:'band',   name:'03 管制束帶回報', must:true,
-    fields:[{k:'scs', label:'SCS 數量'},{k:'ctrl', label:'管制品數量'}],
-    make:v=>[`${v.d} ${v.s}${SHIFT}`, `SCS ${v.scs}`, `管制品 ${v.ctrl}`] },
+    make:v=>[[`${v.d} 逾期共${v.n}件`]] },
+  { id:'win',    name:'每週三 WIN 更新', make:v=>[[v.d]] },
+  { id:'supply', name:'耗材入庫驗收', make:v=>[[v.d]] },
+  { id:'money',  name:'滯留金停用櫃位', make:v=>[[v.d]] },
+  { id:'band',   name:'03 管制束帶回報', must:true, size:7.5, weight:1,
+    fields:[{k:'scs', label:'SCS 數量'},{k:'ctrl', label:'管制品數量（沒有就空白）'}],
+    make:v=>[[v.d, `${v.s}${SHIFT}`, `SCS ${v.scs}`, ...(v.ctrl ? [`管制品 ${v.ctrl}`] : [])]] },
   { id:'redist', name:'包裹重新分配-早', must:true, only:['崗山中','正勤','一心','民裕'],
-    make:v=>[v.d, v.s] },
-  { id:'nosmart',name:'無法智能上架', make:v=>[`${v.d} ${v.s}`] },
-  { id:'zero',   name:'每日後場 0 滯留', must:true, make:v=>[v.d, `${v.s}${SHIFT}`, '無滯留'] },
-  { id:'clean',  name:'該店打掃回報', must:true, make:v=>[v.d] },
-  { id:'err',    name:'一般包裹異常', fields:[{k:'why', label:'異常原因', type:'text', ph:'顯示錯店'}],
-    make:v=>[`${v.d} ${v.s}${SHIFT}`, v.why] },
-  { id:'scserr', name:'SCS 商品異常', fields:[{k:'why', label:'異常原因', type:'text', ph:'商品破損'}],
-    make:v=>[`${v.d} ${v.s}${SHIFT}`, v.why] },
-  { id:'lost',   name:'該月份遺落包裹', make:v=>[`${v.d} ${v.s}`] },
-  { id:'heavy',  name:'夭壽重黑箱', make:v=>[`${v.d} ${v.s}`] },
+    make:v=>[[v.d, v.s]] },
+  { id:'nosmart',name:'無法智能上架', make:v=>[[`${v.d} ${v.s}`]] },
+  { id:'zero',   name:'每日後場 0 滯留', must:true, make:v=>[[v.d, `${v.s}${SHIFT}`, '無滯留']] },
+  { id:'clean',  name:'該店打掃回報', must:true, make:v=>[[v.d]] },
+  { id:'err',    name:'一般包裹異常', weight:1, fields:[{k:'why', label:'異常原因', type:'text', ph:'顯示錯店'}],
+    make:v=>[[`${v.d} ${v.s}${SHIFT}`, v.why]] },
+  { id:'scserr', name:'SCS 商品異常', size:8.5, weight:1, fields:[{k:'why', label:'異常原因', type:'text', ph:'商品破損'}],
+    make:v=>[[`${v.d} ${v.s}${SHIFT}`, v.why]] },
+  { id:'lost',   name:'該月份遺落包裹', make:v=>[[`${v.d} ${v.s}`]] },
+  { id:'heavy',  name:'夭壽重黑箱', size:8, weight:1, make:v=>[[`${v.d} ${v.s}`]] },
   { id:'left',   name:'每日剩餘箱數', must:true,
     fields:[{k:'smart', label:'智能幾箱'},{k:'manual', label:'手動幾箱'}],
-    make:v=>[`${v.d} ${v.s}${SHIFT}`, `智能${v.smart}`, `手動${v.manual}`] },
-  { id:'send',   name:'每日寄件', make:v=>[v.d, `${v.s}${SHIFT}`] },
+    make:v=>[[v.d, `${v.s}${SHIFT}`, `智能${v.smart}`, `手動${v.manual}`]] },
+  { id:'send',   name:'每日寄件', make:v=>[[v.d, `${v.s}${SHIFT}`]] },
+  { id:'count',  name:'盤點櫃位（週二）', size:6.5, weight:1,
+    make:v=>[[`${v.d} ${v.s}盤點前後`], ['停用櫃位']] },
 ];
 
 // 日期格式：月/日，都補零（例：08/17）
@@ -153,12 +186,17 @@ const md = (m, d) => `${String(m).padStart(2,'0')}/${String(d).padStart(2,'0')}`
 // ===== 畫面元件 =====
 const $ = id => document.getElementById(id);
 const cv = $('cv'), ctx = cv.getContext('2d');
-const storeEl = $('store'), typeEl = $('type'), dateEl = $('date'), textEl = $('text');
-const sizeEl = $('size'), weightEl = $('weight'), fieldsBox = $('fieldsBox'), colsEl = $('cols');
+const storeEl = $('store'), typeEl = $('type'), dateEl = $('date'), textsEl = $('texts');
+const sizeEl = $('size'), weightEl = $('weight'), fieldsBox = $('fieldsBox'), colsEl = $('cols'), zoomEl = $('zoom');
 
-let photos = [];          // 已選的照片：{ img, url, meta }
-let base = null;          // 拼好的照片（不含文字），拖曳時不用重拼
-let pos = { x:0.5, y:0.5 }, box = null, drag = null, lastPhoto = null;
+let photos = [];     // 已選的照片：{ src(縮小後的畫布), url, meta, rot, zoom, ox, oy }
+let cells = [];      // 每張照片在畫面上的位置：{ x, y, w, h, i }
+let base = null;     // 拼好的照片（不含文字）
+let boxPos = [];     // 每個文字框的中心位置（比例）；null＝用預設位置
+let boxes = [];      // 每個文字框實際範圍（拖曳判斷用）
+let sel = 0;         // 目前選取要調整的照片
+let drag = null, lastPhoto = null;
+let cropMode = false, cropDraft = null;   // 裁切模式、正在調整的裁切範圍
 
 // 記住上次選的店（只存在這台手機／電腦的瀏覽器裡，不會上傳）
 function load(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
@@ -166,6 +204,8 @@ function save(k,v){ try { localStorage.setItem(k,v); } catch(e){} }
 
 STORES.forEach(s => storeEl.add(new Option(s, s)));
 storeEl.value = STORES.includes(load('store')) ? load('store') : STORES[0];
+
+const curType = () => TYPES.find(t => t.id === typeEl.value);
 
 function fillTypes() {
   const keep = typeEl.value;
@@ -176,7 +216,7 @@ function fillTypes() {
 }
 
 function fillFields() {
-  const t = TYPES.find(t => t.id === typeEl.value);
+  const t = curType();
   fieldsBox.querySelectorAll('.field').forEach(n => n.remove());
   (t.fields || []).forEach(f => {
     const d = document.createElement('div');
@@ -201,12 +241,25 @@ function applyTime() {
   if (t && lastPhoto) t.value = lastPhoto.hh ? `${lastPhoto.hh}:${lastPhoto.mm}` : '';
 }
 
-// 依規則組出文字（沒填的欄位顯示 __）
+// 依規則組出文字（沒填的欄位留空白，你直接在上面的欄位輸入就好）
 function buildText() {
-  const t = TYPES.find(t => t.id === typeEl.value);
+  const t = curType();
   const v = { d: dateEl.value.trim(), s: storeEl.value };
-  fieldsBox.querySelectorAll('.field input').forEach(i => v[i.dataset.k] = i.value.trim() || '__');
-  textEl.value = t.make(v).join('\n');
+  (t.fields || []).forEach(f => v[f.k] = '');   // 先把這個相簿的欄位都設成空白，避免讀不到而出錯
+  fieldsBox.querySelectorAll('.field input').forEach(i => v[i.dataset.k] = i.value.trim());
+  const groups = t.make(v).map(lines => lines.map(l => String(l ?? '').trim()).filter(l => l !== '').join('\n'));
+  // 文字框數量變了，就重建輸入框
+  if (textsEl.children.length !== groups.length) {
+    textsEl.innerHTML = '';
+    groups.forEach((_, i) => {
+      const ta = document.createElement('textarea');
+      ta.rows = 4; ta.className = 'textBox';
+      if (groups.length > 1) ta.placeholder = `文字框 ${i + 1}`;
+      ta.addEventListener('input', draw);
+      textsEl.appendChild(ta);
+    });
+  }
+  [...textsEl.children].forEach((ta, i) => ta.value = groups[i]);
   draw();
 }
 
@@ -254,8 +307,39 @@ function loadImage(url) {
   return new Promise((ok, bad) => { const im = new Image(); im.onload = () => ok(im); im.onerror = bad; im.src = url; });
 }
 
+// 把照片縮到最長邊 MAX_SIDE，之後旋轉、放大、拖曳都比較順
+function shrink(img) {
+  const s = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
+
+// 轉向後的寬高
+const rdim = p => (p.rot % 180 === 0) ? [p.src.width, p.src.height] : [p.src.height, p.src.width];
+// 轉向、裁切後的寬高比
+const ratioOf = p => { const [RW, RH] = rdim(p); return (p.crop.r - p.crop.l) * RW / ((p.crop.b - p.crop.t) * RH); };
+const FULL = () => ({ l: 0, t: 0, r: 1, b: 1 });   // 不裁切
+
+// 在「轉向後的座標」畫出整張照片
+function drawRot(b, p) {
+  const [RW, RH] = rdim(p);
+  b.translate(RW / 2, RH / 2);
+  b.rotate(p.rot * Math.PI / 180);
+  b.drawImage(p.src, -p.src.width / 2, -p.src.height / 2);
+}
+
 // ===== 照片清單 =====
-function defaultCols(n) { return n <= 1 ? 1 : n === 2 ? 2 : n === 3 ? 3 : n === 4 ? 2 : n <= 6 ? 3 : 4; }
+function defaultCols() {
+  const n = photos.length;
+  const wide = photos.filter(p => ratioOf(p) > 1).length > n / 2;   // 大部分是橫的照片
+  if (n <= 1) return 1;
+  if (n === 2) return wide ? 1 : 2;
+  if (n === 3) return wide ? 1 : 3;
+  if (n === 4) return 2;
+  return wide ? 2 : (n <= 6 ? 3 : 4);
+}
 
 function onPhotosChanged(firstChanged) {
   // 日期以第一張照片為準
@@ -271,6 +355,8 @@ function onPhotosChanged(firstChanged) {
     }
     applyTime();
   }
+  if (cropMode) exitCrop();
+  if (sel >= photos.length) sel = Math.max(0, photos.length - 1);
   $('colsBox').style.display = photos.length > 1 ? '' : 'none';
   renderThumbs();
   buildBase();
@@ -282,18 +368,37 @@ function renderThumbs() {
   box.innerHTML = '';
   photos.forEach((p, i) => {
     const d = document.createElement('div');
-    d.className = 'thumb';
+    d.className = 'thumb' + (i === sel ? ' sel' : '');
     d.innerHTML = `<img alt=""><div>第 ${i + 1} 張</div><div class="ctl"><span data-a="L">◀</span><span data-a="X">✕</span><span data-a="R">▶</span></div>`;
-    d.querySelector('img').src = p.url;
+    const im = d.querySelector('img');
+    im.src = p.url;
+    im.style.transform = `rotate(${p.rot}deg)`;
+    im.addEventListener('click', () => selectPhoto(i));
     d.querySelectorAll('span').forEach(s => s.addEventListener('click', () => {
       const a = s.dataset.a, oldFirst = photos[0];
-      if (a === 'L' && i > 0) [photos[i - 1], photos[i]] = [photos[i], photos[i - 1]];
-      if (a === 'R' && i < photos.length - 1) [photos[i + 1], photos[i]] = [photos[i], photos[i + 1]];
-      if (a === 'X') { URL.revokeObjectURL(p.url); photos.splice(i, 1); colsEl.value = defaultCols(photos.length); }
+      if (a === 'L' && i > 0) { [photos[i - 1], photos[i]] = [photos[i], photos[i - 1]]; sel = i - 1; }
+      if (a === 'R' && i < photos.length - 1) { [photos[i + 1], photos[i]] = [photos[i], photos[i + 1]]; sel = i + 1; }
+      if (a === 'X') { URL.revokeObjectURL(p.url); photos.splice(i, 1); colsEl.value = defaultCols(); }
       onPhotosChanged(photos[0] !== oldFirst);
     }));
     box.appendChild(d);
   });
+  updateEditBox();
+}
+
+function selectPhoto(i) {
+  if (cropMode && i !== sel) { exitCrop(); draw(); }
+  sel = i;
+  document.querySelectorAll('.thumb').forEach((t, k) => t.classList.toggle('sel', k === i));
+  updateEditBox();
+}
+
+function updateEditBox() {
+  const p = photos[sel];
+  $('editBox').style.display = p && !cropMode ? '' : 'none';
+  if (!p) return;
+  $('editTitle').textContent = photos.length > 1 ? `調整第 ${sel + 1} 張照片` : '調整照片';
+  zoomEl.value = p.zoom;
 }
 
 $('file').addEventListener('change', async e => {
@@ -307,51 +412,96 @@ $('file').addEventListener('change', async e => {
     const url = URL.createObjectURL(f);
     try {
       const [img, meta] = await Promise.all([loadImage(url), getPhotoDate(f)]);
-      photos.push({ img, url, meta });
+      photos.push({ src: shrink(img), url, meta, rot: 0, zoom: 1, ox: 0, oy: 0, crop: FULL() });
     } catch (err) { URL.revokeObjectURL(url); alert(`有一張照片讀不到：${f.name}`); }
   }
-  if (wasEmpty) pos = { x:0.5, y:0.5 };
-  colsEl.value = defaultCols(photos.length);
+  if (wasEmpty) { boxPos = []; sel = 0; }
+  colsEl.value = defaultCols();
   onPhotosChanged(wasEmpty);
 });
 
-$('clear').addEventListener('click', () => {
+function clearPhotos() {
   photos.forEach(p => URL.revokeObjectURL(p.url));
-  photos = [];
+  photos = []; boxPos = []; sel = 0;
   onPhotosChanged(true);
-});
+}
+$('clear').addEventListener('click', clearPhotos);
 
 colsEl.addEventListener('change', () => { buildBase(); draw(); });
 
-// ===== 拼組合照：每一列的照片等高、照片完整不裁切，列與列之間留白線 =====
+// 旋轉、放大、還原
+function rotate(deg) {
+  const p = photos[sel]; if (!p) return;
+  p.rot = (p.rot + deg + 360) % 360; p.ox = 0; p.oy = 0;
+  // 裁切範圍跟著照片一起轉
+  const c = p.crop;
+  p.crop = deg > 0 ? { l: 1 - c.b, t: c.l, r: 1 - c.t, b: c.r } : { l: c.t, t: 1 - c.r, r: c.b, b: 1 - c.l };
+  renderThumbs(); buildBase(); draw();
+}
+$('rotL').addEventListener('click', () => rotate(-90));
+$('rotR').addEventListener('click', () => rotate(90));
+$('resetPhoto').addEventListener('click', () => {
+  const p = photos[sel]; if (!p) return;
+  Object.assign(p, { rot: 0, zoom: 1, ox: 0, oy: 0, crop: FULL() });
+  renderThumbs(); buildBase(); draw();
+});
+zoomEl.addEventListener('input', () => {
+  const p = photos[sel]; if (!p) return;
+  p.zoom = +zoomEl.value; clampPan(p);
+  buildBase(); draw();
+});
+
+// 放大後可以移動的範圍：照片一定蓋滿格子，不會露出空白
+function clampPan(p) {
+  const m = (p.zoom - 1) / 2;
+  p.ox = Math.max(-m, Math.min(m, p.ox));
+  p.oy = Math.max(-m, Math.min(m, p.oy));
+}
+
+// ===== 拼組合照：每一列的照片等高，列與列之間留白線 =====
+function drawPhoto(b, p, c) {
+  b.save();
+  b.beginPath(); b.rect(c.x, c.y, c.w, c.h); b.clip();
+  // 把裁切範圍放大／縮小到剛好填滿格子，再套用放大和移動
+  const [RW, RH] = rdim(p);
+  const cw = (p.crop.r - p.crop.l) * RW, ch = (p.crop.b - p.crop.t) * RH;
+  b.translate(c.x + c.w / 2 + p.ox * c.w, c.y + c.h / 2 + p.oy * c.h);
+  b.scale(c.w * p.zoom / cw, c.h * p.zoom / ch);
+  b.translate(-(p.crop.l * RW + cw / 2), -(p.crop.t * RH + ch / 2));
+  drawRot(b, p);
+  b.restore();
+}
+
 function buildBase() {
+  cells = [];
   if (!photos.length) { base = null; return; }
+  base = document.createElement('canvas');
   if (photos.length === 1) {
-    const im = photos[0].img;
-    base = document.createElement('canvas');
-    base.width = im.naturalWidth; base.height = im.naturalHeight;
-    base.getContext('2d').drawImage(im, 0, 0);
+    const p = photos[0];
+    const [RW, RH] = rdim(p);
+    const W = Math.max(1, Math.round((p.crop.r - p.crop.l) * RW));
+    const H = Math.max(1, Math.round((p.crop.b - p.crop.t) * RH));
+    base.width = W; base.height = H;
+    cells = [{ x: 0, y: 0, w: W, h: H, i: 0 }];
+    drawPhoto(base.getContext('2d'), p, cells[0]);
     return;
   }
   const W = 2000, gap = Math.round(W * 0.008);
   const cols = +colsEl.value;
   const rows = [];
-  for (let i = 0; i < photos.length; i += cols) rows.push(photos.slice(i, i + cols));
+  for (let i = 0; i < photos.length; i += cols) rows.push(photos.slice(i, i + cols).map((p, k) => ({ p, i: i + k })));
 
-  // 先算每一列的高度
-  let lastFullH = null;
+  let lastH = null;
   const plan = rows.map((r, ri) => {
-    const ratios = r.map(p => p.img.naturalWidth / p.img.naturalHeight);
+    const ratios = r.map(o => ratioOf(o.p));
     const sum = ratios.reduce((a, b) => a + b, 0);
     let h = (W - gap * (r.length - 1)) / sum;
     // 最後一列張數不足時，跟上一列一樣高、置中，避免照片被放得特別大
-    if (ri === rows.length - 1 && r.length < cols && lastFullH) h = Math.min(h, lastFullH);
-    lastFullH = h;
+    if (ri === rows.length - 1 && r.length < cols && lastH) h = Math.min(h, lastH);
+    lastH = h;
     return { r, ratios, h };
   });
   const H = Math.round(plan.reduce((a, p) => a + p.h, 0) + gap * (rows.length - 1));
-
-  base = document.createElement('canvas');
   base.width = W; base.height = H;
   const b = base.getContext('2d');
   b.fillStyle = '#fff'; b.fillRect(0, 0, W, H);
@@ -359,61 +509,170 @@ function buildBase() {
   plan.forEach(({ r, ratios, h }) => {
     const rowW = ratios.reduce((a, q) => a + q * h, 0) + gap * (r.length - 1);
     let x = (W - rowW) / 2;
-    r.forEach((p, i) => {
-      const w = ratios[i] * h;
-      b.drawImage(p.img, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    r.forEach((o, k) => {
+      const w = ratios[k] * h;
+      const c = { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h), i: o.i };
+      cells.push(c);
+      drawPhoto(b, o.p, c);
       x += w + gap;
     });
     y += h + gap;
   });
 }
 
+// 文字框預設位置：只有一個框時在正中間；有好幾個框時，第 N 個框放在第 N 張照片的上方
+function defaultPos(i, n) {
+  if (n === 1 || !cells.length) return { x: 0.5, y: 0.5 };
+  const c = cells.find(c => c.i === i) || cells[cells.length - 1];
+  return { x: (c.x + c.w / 2) / base.width, y: (c.y + c.h * 0.15) / base.height };
+}
+
 // ===== 畫圖（拼好的照片＋文字框）=====
 function draw() {
+  boxes = [];
+  if (cropMode) { drawCrop(); return; }
   if (!base) {
     cv.width = 800; cv.height = 600;
     ctx.fillStyle = '#ddd'; ctx.fillRect(0, 0, 800, 600);
     ctx.fillStyle = '#888'; ctx.font = '36px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('請先選照片', 400, 300);
-    box = null; return;
+    return;
   }
   cv.width = base.width; cv.height = base.height;
   ctx.drawImage(base, 0, 0);
 
-  const lines = textEl.value.split('\n').filter(s => s.trim() !== '');
-  if (!lines.length) { box = null; return; }
+  const tas = [...textsEl.children];
+  tas.forEach((ta, bi) => {
+    const lines = ta.value.split('\n').filter(s => s.trim() !== '');
+    if (!lines.length) { boxes[bi] = null; return; }
 
-  // 字的大小：以短邊為準；組合照很扁時，改用長邊的 6 成，避免字變太小
-  const ref = Math.max(Math.min(cv.width, cv.height), Math.max(cv.width, cv.height) * 0.6);
-  const fs = Math.round(ref * sizeEl.value / 100);
-  ctx.font = `bold ${fs}px "Microsoft JhengHei","Noto Sans TC",sans-serif`;
-  const pad = fs * 0.35, lh = fs * 1.25;
-  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + pad * 2;
-  const h = lh * (lines.length - 1) + fs + pad * 2;
+    // 字的大小：以短邊為準；組合照很扁時，改用長邊的 6 成，避免字變太小
+    const ref = Math.max(Math.min(cv.width, cv.height), Math.max(cv.width, cv.height) * 0.6);
+    let fs = Math.round(ref * sizeEl.value / 100);
+    const measure = () => {
+      ctx.font = `bold ${fs}px "Microsoft JhengHei","Noto Sans TC",sans-serif`;
+      return Math.max(...lines.map(l => ctx.measureText(l).width)) + fs * 0.7;
+    };
+    let w = measure();
+    if (w > cv.width * 0.96) { fs = Math.floor(fs * cv.width * 0.96 / w); w = measure(); }   // 太寬就自動縮小
+    const pad = fs * 0.35, lh = fs * 1.25;
+    const h = lh * (lines.length - 1) + fs + pad * 2;
 
-  let x = pos.x * cv.width - w / 2, y = pos.y * cv.height - h / 2;
-  x = Math.max(0, Math.min(cv.width - w, x));
-  y = Math.max(0, Math.min(cv.height - h, y));
-  box = { x, y, w, h };
+    const pos = boxPos[bi] || defaultPos(bi, tas.length);
+    let x = pos.x * cv.width - w / 2, y = pos.y * cv.height - h / 2;
+    x = Math.max(0, Math.min(cv.width - w, x));
+    y = Math.max(0, Math.min(cv.height - h, y));
+    boxes[bi] = { x, y, w, h };
 
-  ctx.fillStyle = '#fff';
-  ctx.beginPath(); ctx.roundRect(x, y, w, h, fs * 0.25); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, fs * 0.25); ctx.fill();
 
-  ctx.fillStyle = '#000'; ctx.strokeStyle = '#000';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.lineJoin = 'round';
-  ctx.lineWidth = fs * weightEl.value / 100;
-  lines.forEach((l, i) => {
-    if (ctx.lineWidth > 0) ctx.strokeText(l, x + w / 2, y + pad + i * lh);
-    ctx.fillText(l, x + w / 2, y + pad + i * lh);
+    ctx.fillStyle = '#000'; ctx.strokeStyle = '#000';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.lineJoin = 'round';
+    ctx.lineWidth = fs * weightEl.value / 100;
+    lines.forEach((l, i) => {
+      if (ctx.lineWidth > 0) ctx.strokeText(l, x + w / 2, y + pad + i * lh);
+      ctx.fillText(l, x + w / 2, y + pad + i * lh);
+    });
   });
 }
 
+// ===== 裁切 =====
+const MIN_CROP = 0.08;   // 裁切範圍最小 8%
+
+function enterCrop() {
+  const p = photos[sel]; if (!p) return;
+  cropMode = true;
+  cropDraft = { ...p.crop };
+  $('cropTitle').textContent = photos.length > 1 ? `裁切第 ${sel + 1} 張照片` : '裁切照片';
+  $('cropBar').style.display = '';
+  updateEditBox();
+  draw();
+  cv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function exitCrop() {
+  cropMode = false; cropDraft = null; drag = null;
+  $('cropBar').style.display = 'none';
+  updateEditBox();
+}
+$('cropBtn').addEventListener('click', enterCrop);
+$('cropOk').addEventListener('click', () => {
+  const p = photos[sel];
+  if (p) { p.crop = { ...cropDraft }; p.zoom = 1; p.ox = 0; p.oy = 0; }
+  exitCrop();
+  colsEl.value = defaultCols();
+  buildBase(); draw();
+});
+$('cropCancel').addEventListener('click', () => { exitCrop(); draw(); });
+$('cropNone').addEventListener('click', () => { cropDraft = FULL(); draw(); });
+
+// 裁切模式的畫面：整張照片＋暗色遮罩＋框框＋四個角
+function drawCrop() {
+  const p = photos[sel];
+  if (!p) { exitCrop(); return draw(); }
+  const [RW, RH] = rdim(p);
+  cv.width = RW; cv.height = RH;
+  ctx.save(); drawRot(ctx, p); ctx.restore();
+  const d = cropDraft;
+  const x = d.l * RW, y = d.t * RH, w = (d.r - d.l) * RW, h = (d.b - d.t) * RH;
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, RW, y);
+  ctx.fillRect(0, y + h, RW, RH - y - h);
+  ctx.fillRect(0, y, x, h);
+  ctx.fillRect(x + w, y, RW - x - w, h);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(2, Math.min(RW, RH) * 0.006);
+  ctx.strokeRect(x, y, w, h);
+  const hs = Math.min(RW, RH) * 0.06;
+  ctx.fillStyle = '#ee4d2d';
+  [[x, y], [x + w, y], [x, y + h], [x + w, y + h]].forEach(([cx, cy]) => ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs));
+}
+
+function cropDown(p) {
+  const n = { x: p.x / cv.width, y: p.y / cv.height };
+  const d = cropDraft;
+  const tol = Math.min(cv.width, cv.height) * 0.08;
+  const tx = tol / cv.width, ty = tol / cv.height;
+  const corners = { tl: [d.l, d.t], tr: [d.r, d.t], bl: [d.l, d.b], br: [d.r, d.b] };
+  for (const k in corners) {
+    const [cx, cy] = corners[k];
+    if (Math.abs(n.x - cx) < tx && Math.abs(n.y - cy) < ty) return { kind: 'crop', h: k };
+  }
+  if (n.x > d.l && n.x < d.r && n.y > d.t && n.y < d.b) return { kind: 'crop', h: 'move', sx: n.x, sy: n.y, d0: { ...d } };
+  return { kind: 'crop', h: 'new', ax: n.x, ay: n.y };
+}
+
+function cropMove(p) {
+  const n = { x: Math.max(0, Math.min(1, p.x / cv.width)), y: Math.max(0, Math.min(1, p.y / cv.height)) };
+  const d = cropDraft, h = drag.h;
+  if (h === 'move') {
+    const o = drag.d0;
+    const dx = Math.max(-o.l, Math.min(1 - o.r, n.x - drag.sx));
+    const dy = Math.max(-o.t, Math.min(1 - o.b, n.y - drag.sy));
+    Object.assign(d, { l: o.l + dx, r: o.r + dx, t: o.t + dy, b: o.b + dy });
+  } else if (h === 'new') {
+    d.l = Math.min(drag.ax, n.x); d.r = Math.max(drag.ax, n.x);
+    d.t = Math.min(drag.ay, n.y); d.b = Math.max(drag.ay, n.y);
+    if (d.r - d.l < MIN_CROP) { d.r = Math.min(1, d.l + MIN_CROP); d.l = d.r - MIN_CROP; }
+    if (d.b - d.t < MIN_CROP) { d.b = Math.min(1, d.t + MIN_CROP); d.t = d.b - MIN_CROP; }
+  } else {
+    if (h[1] === 'l') d.l = Math.min(n.x, d.r - MIN_CROP); else d.r = Math.max(n.x, d.l + MIN_CROP);
+    if (h[0] === 't') d.t = Math.min(n.y, d.b - MIN_CROP); else d.b = Math.max(n.y, d.t + MIN_CROP);
+  }
+  drawCrop();
+}
+
 // ===== 事件 =====
+function onTypeChanged() {
+  boxPos = [];
+  sizeEl.value = curType().size || 10.5;
+  weightEl.value = curType().weight ?? 3;
+  fillFields(); buildText();
+}
 storeEl.addEventListener('change', () => { save('store', storeEl.value); fillTypes(); fillFields(); buildText(); });
-typeEl.addEventListener('change', () => { fillFields(); buildText(); });
+// 切換相簿類型時，順便清除已選的照片
+typeEl.addEventListener('change', () => { onTypeChanged(); clearPhotos(); });
 dateEl.addEventListener('input', buildText);
-textEl.addEventListener('input', draw);
 sizeEl.addEventListener('input', draw);
 weightEl.addEventListener('input', draw);
 
@@ -421,26 +680,61 @@ function toCanvas(e) {
   const r = cv.getBoundingClientRect();
   return { x:(e.clientX - r.left) * cv.width / r.width, y:(e.clientY - r.top) * cv.height / r.height };
 }
+const inside = (p, b) => b && p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+
 cv.addEventListener('pointerdown', e => {
-  if (!box) return;
   const p = toCanvas(e);
-  if (p.x >= box.x && p.x <= box.x + box.w && p.y >= box.y && p.y <= box.y + box.h) {
-    drag = { dx:p.x - (box.x + box.w / 2), dy:p.y - (box.y + box.h / 2) };
-    cv.setPointerCapture(e.pointerId);
+  if (cropMode) { drag = cropDown(p); cv.setPointerCapture(e.pointerId); return; }
+  // 先看有沒有點到文字框（後畫的在上面，所以從後面找）
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    if (inside(p, boxes[i])) {
+      const b = boxes[i];
+      drag = { kind: 'text', i, dx: p.x - (b.x + b.w / 2), dy: p.y - (b.y + b.h / 2) };
+      cv.setPointerCapture(e.pointerId);
+      return;
+    }
+  }
+  // 再看有沒有點到照片：選取那張照片，放大過的可以拖曳
+  const c = cells.find(c => inside(p, c));
+  if (c) {
+    selectPhoto(c.i);
+    const ph = photos[c.i];
+    if (ph.zoom > 1) {
+      drag = { kind: 'photo', c, ph, sx: p.x, sy: p.y, ox: ph.ox, oy: ph.oy };
+      cv.setPointerCapture(e.pointerId);
+    }
   }
 });
 cv.addEventListener('pointermove', e => {
   if (!drag) return;
   const p = toCanvas(e);
-  pos = { x:(p.x - drag.dx) / cv.width, y:(p.y - drag.dy) / cv.height };
-  draw();
+  if (drag.kind === 'crop') { cropMove(p); return; }
+  if (drag.kind === 'text') {
+    boxPos[drag.i] = { x: (p.x - drag.dx) / cv.width, y: (p.y - drag.dy) / cv.height };
+    draw();
+  } else {
+    const ph = drag.ph;
+    ph.ox = drag.ox + (p.x - drag.sx) / drag.c.w;
+    ph.oy = drag.oy + (p.y - drag.sy) / drag.c.h;
+    clampPan(ph);
+    ctxBaseOne(drag.c, ph);
+    draw();
+  }
 });
+// 拖曳照片時只重畫那一格，比較順
+function ctxBaseOne(c, ph) {
+  const b = base.getContext('2d');
+  b.fillStyle = '#fff'; b.fillRect(c.x, c.y, c.w, c.h);
+  drawPhoto(b, ph, c);
+}
 cv.addEventListener('pointerup', () => { drag = null; });
 cv.addEventListener('pointercancel', () => { drag = null; });
 
 $('save').addEventListener('click', () => {
   if (!base) { alert('請先選照片'); return; }
-  if (textEl.value.includes('__') && !confirm('還有欄位沒填（顯示 __），確定要存嗎？')) return;
+  if (cropMode) { alert('請先按「完成裁切」或「取消」'); return; }
+  const empty = [...fieldsBox.querySelectorAll('.field input')].some(i => i.value.trim() === '' && !i.dataset.k.match(/ctrl|tmr|ret/));
+  if (empty && !confirm('還有欄位沒填，確定要存嗎？')) return;
   cv.toBlob(b => {
     const a = document.createElement('a');
     const t = new Date();
@@ -454,7 +748,7 @@ $('save').addEventListener('click', () => {
 // 初始化
 const today = new Date();
 dateEl.value = md(today.getMonth() + 1, today.getDate());
-fillTypes(); fillFields(); buildText();
+fillTypes(); onTypeChanged();
 
 // 離線功能：只有從網址（https）開啟時才會啟用，直接點開檔案時不會
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {

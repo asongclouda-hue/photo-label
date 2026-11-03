@@ -1,6 +1,6 @@
 // 離線快取設定
 // 每次更新 APP，把下面的版本號改掉，手機才會換成新版
-const CACHE = 'photo-label-v0.8';
+const CACHE = 'photo-label-v0.11';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 // 安裝：把 APP 的檔案存到手機
